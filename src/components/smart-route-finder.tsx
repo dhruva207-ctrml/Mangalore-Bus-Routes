@@ -34,6 +34,12 @@ const formSchema = z.object({
 type RouteSegment = NonNullable<SmartRouteSuggestionOutput['routes']>[0]['segments'][0];
 type SuggestedRoute = NonNullable<SmartRouteSuggestionOutput['routes']>[0];
 
+const getJourneyStopCount = (route: SuggestedRoute) =>
+  route.segments.reduce(
+    (count, segment, index) => count + segment.stops.length - (index > 0 ? 1 : 0),
+    0,
+  );
+
 interface SmartRouteFinderProps {
   busRoutes: BusRoute[];
 }
@@ -347,14 +353,25 @@ export function SmartRouteFinder({ busRoutes }: SmartRouteFinderProps) {
       // 3. Convert back to array
       result[transfers] = Object.entries(byTailSig).map(([sig, data]) => ({
         headerSegments: data.headers,
-        routes: data.representativeRoutes, // The routes from the first bus added are sufficient as representatives for the tails
+        routes: [...data.representativeRoutes].sort((a, b) =>
+          getJourneyStopCount(a) - getJourneyStopCount(b)
+          || a.segments.map(segment => segment.busNumber).join(' → ')
+            .localeCompare(b.segments.map(segment => segment.busNumber).join(' → '), undefined, { numeric: true })
+        ),
         id: sig
       }));
        
-      // Sort specific groups? Maybe by bus number of first header?
-      result[transfers].sort((a, b) => 
-        a.headerSegments[0].busNumber.localeCompare(b.headerSegments[0].busNumber, undefined, { numeric: true })
-      );
+      result[transfers].sort((a, b) => {
+        const aFewestStops = Math.min(...a.routes.map(getJourneyStopCount));
+        const bFewestStops = Math.min(...b.routes.map(getJourneyStopCount));
+
+        return aFewestStops - bFewestStops
+          || a.headerSegments[0].busNumber.localeCompare(
+            b.headerSegments[0].busNumber,
+            undefined,
+            { numeric: true },
+          );
+      });
     });
 
     return result;
@@ -434,6 +451,7 @@ export function SmartRouteFinder({ busRoutes }: SmartRouteFinderProps) {
     const routeCount = routes.length; // This is the number of connecting options (tails)
     const hasTransfers = transferKey > 0;
     const transferPoint = representativeSegment.endStop;
+    const fewestStops = Math.min(...routes.map(getJourneyStopCount));
     
     // Header Content: List of Bus Badges
     const HeaderBusList = () => (
@@ -526,6 +544,9 @@ export function SmartRouteFinder({ busRoutes }: SmartRouteFinderProps) {
           <div className="mt-2 flex items-center gap-2">
             <Badge variant="secondary" className="text-[10px] sm:text-xs">
               {routeCount} connection option{routeCount === 1 ? '' : 's'}
+            </Badge>
+            <Badge variant="outline" className="text-[10px] sm:text-xs">
+              Fewest: {fewestStops} stops
             </Badge>
           </div>
         </div>
@@ -638,7 +659,7 @@ export function SmartRouteFinder({ busRoutes }: SmartRouteFinderProps) {
             <CardTitle className="text-base sm:text-lg">Suggested Routes</CardTitle>
             <CardDescription className="text-xs sm:text-sm">
                 {suggestion.isRoutePossible 
-                    ? `Found ${suggestion.routes.length} possible route(s).`
+                    ? `Found ${suggestion.routes.length} possible route(s). Fewer-stop options appear first within each transfer group.`
                     : "No direct or single-transfer route could be found."
                 }
             </CardDescription>
